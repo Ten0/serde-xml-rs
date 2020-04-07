@@ -1,13 +1,13 @@
 use std::io::Read;
 
-use serde::de;
-use xml::reader::{EventReader, ParserConfig, XmlEvent};
+use serde::de::{self, Unexpected};
 use xml::name::OwnedName;
+use xml::reader::{EventReader, ParserConfig, XmlEvent};
 
-use error::{Error, ErrorKind, Result};
 use self::map::MapAccess;
 use self::seq::SeqAccess;
 use self::var::EnumAccess;
+use error::{Error, Result};
 
 mod map;
 mod seq;
@@ -35,7 +35,6 @@ mod var;
 pub fn from_str<'de, T: de::Deserialize<'de>>(s: &str) -> Result<T> {
     from_reader(s.as_bytes())
 }
-
 
 /// A convenience method for deserialize some object from a reader.
 ///
@@ -100,10 +99,10 @@ impl<'de, R: Read> Deserializer<R> {
 
     fn inner_next(&mut self) -> Result<XmlEvent> {
         loop {
-            match self.reader.next().map_err(ErrorKind::Syntax)? {
-                XmlEvent::StartDocument { .. } |
-                XmlEvent::ProcessingInstruction { .. } |
-                XmlEvent::Comment(_) => { /* skip */ },
+            match self.reader.next()? {
+                XmlEvent::StartDocument { .. }
+                | XmlEvent::ProcessingInstruction { .. }
+                | XmlEvent::Comment(_) => { /* skip */ }
                 other => return Ok(other),
             }
         }
@@ -118,11 +117,11 @@ impl<'de, R: Read> Deserializer<R> {
         match next {
             XmlEvent::StartElement { .. } => {
                 self.depth += 1;
-            },
+            }
             XmlEvent::EndElement { .. } => {
                 self.depth -= 1;
-            },
-            _ => {},
+            }
+            _ => {}
         }
         debug!("Fetched {:?}", next);
         Ok(next)
@@ -156,11 +155,11 @@ impl<'de, R: Read> Deserializer<R> {
             if name == start_name {
                 Ok(())
             } else {
-                Err(ErrorKind::Custom(format!(
+                Err(Error::Custom { field: format!(
                     "End tag </{}> didn't match the start tag <{}>",
                     name.local_name,
                     start_name.local_name
-                )).into())
+                ) })
             }
         })
     }
@@ -171,9 +170,10 @@ impl<'de, R: Read> Deserializer<R> {
         }
         self.read_inner_value::<V, String, _>(|this| {
             if let XmlEvent::EndElement { .. } = *this.peek()? {
-                return Err(
-                    ErrorKind::UnexpectedToken("EndElement".into(), "Characters".into()).into(),
-                );
+                return Err(Error::UnexpectedToken {
+                    token: "EndElement".into(),
+                    found: "Characters".into(),
+                });
             }
 
             expect!(this.next()?, XmlEvent::Characters(s) => {
@@ -196,7 +196,7 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
     type Error = Error;
 
     forward_to_deserialize_any! {
-        newtype_struct identifier
+        identifier
     }
 
     fn deserialize_struct<V: de::Visitor<'de>>(
@@ -227,7 +227,25 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
     deserialize_type!(deserialize_u64 => visit_u64);
     deserialize_type!(deserialize_f32 => visit_f32);
     deserialize_type!(deserialize_f64 => visit_f64);
-    deserialize_type!(deserialize_bool => visit_bool);
+
+    fn deserialize_bool<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        if let XmlEvent::StartElement { .. } = *self.peek()? {
+            self.set_map_value()
+        }
+        self.read_inner_value::<V, V::Value, _>(|this| {
+            if let XmlEvent::EndElement { .. } = *this.peek()? {
+                return visitor.visit_bool(false);
+            }
+            expect!(this.next()?, XmlEvent::Characters(s) => {
+                match s.as_str() {
+                    "true" | "1" => visitor.visit_bool(true),
+                    "false" | "0" => visitor.visit_bool(false),
+                    _ => Err(de::Error::invalid_value(Unexpected::Str(&s), &"a boolean")),
+                }
+
+            })
+        })
+    }
 
     fn deserialize_char<V: de::Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         self.deserialize_string(visitor)
@@ -260,6 +278,14 @@ impl<'de, 'a, R: Read> de::Deserializer<'de> for &'a mut Deserializer<R> {
         visitor: V,
     ) -> Result<V::Value> {
         self.deserialize_unit(visitor)
+    }
+
+    fn deserialize_newtype_struct<V: de::Visitor<'de>>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value> {
+        visitor.visit_newtype_struct(self)
     }
 
     fn deserialize_tuple_struct<V: de::Visitor<'de>>(

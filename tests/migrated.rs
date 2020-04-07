@@ -2,37 +2,15 @@
 extern crate serde_derive;
 
 extern crate log;
+extern crate simple_logger;
 
 extern crate serde;
 extern crate serde_xml_rs;
 
 use std::fmt::Debug;
 
-use serde_xml_rs::{from_str, Error, ErrorKind};
 use serde::{de, ser};
-
-fn init_logger() {
-    use log::{LogLevel, LogMetadata, LogRecord};
-
-    struct SimpleLogger;
-
-    impl log::Log for SimpleLogger {
-        fn enabled(&self, metadata: &LogMetadata) -> bool {
-            metadata.level() <= LogLevel::Debug
-        }
-
-        fn log(&self, record: &LogRecord) {
-            if self.enabled(record.metadata()) {
-                println!("{} - {}", record.level(), record.args());
-            }
-        }
-    }
-
-    let _ = log::set_logger(|max_log_level| {
-        max_log_level.set(log::LogLevelFilter::Debug);
-        Box::new(SimpleLogger)
-    });
-}
+use serde_xml_rs::{from_str, Error};
 
 #[derive(PartialEq, Debug, Serialize, Deserialize)]
 enum Animal {
@@ -85,7 +63,19 @@ where
 {
     for &s in errors {
         assert!(match from_str::<T>(s) {
-            Err(Error(ErrorKind::Syntax(_), _)) => true,
+            Err(Error::Syntax { source: _ }) => true,
+            _ => false,
+        });
+    }
+}
+
+fn test_parse_invalid<'de, 'a, T>(errors: &[&'a str])
+where
+    T: PartialEq + Debug + ser::Serialize + de::Deserialize<'de>,
+{
+    for &s in errors {
+        assert!(match from_str::<T>(s) {
+            Err(_) => true,
             _ => false,
         });
     }
@@ -93,7 +83,7 @@ where
 
 #[test]
 fn test_namespaces() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(PartialEq, Serialize, Deserialize, Debug)]
     struct Envelope {
         subject: String,
@@ -103,20 +93,18 @@ fn test_namespaces() {
     <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
         <gesmes:subject>Reference rates</gesmes:subject>
     </gesmes:Envelope>"#;
-    test_parse_ok(&[
-        (
-            s,
-            Envelope {
-                subject: "Reference rates".to_string(),
-            },
-        ),
-    ]);
+    test_parse_ok(&[(
+        s,
+        Envelope {
+            subject: "Reference rates".to_string(),
+        },
+    )]);
 }
 
 #[test]
 #[ignore] // FIXME
 fn test_doctype() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(PartialEq, Serialize, Deserialize, Debug)]
     struct Envelope {
         subject: String,
@@ -163,7 +151,7 @@ fn test_doctype() {
 
 #[test]
 fn test_doctype_fail() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(PartialEq, Serialize, Deserialize, Debug)]
     struct Envelope {
         subject: String,
@@ -178,7 +166,6 @@ fn test_doctype_fail() {
             <Envelope>
             <subject>Reference rates</subject>
             </Envelope>"#,
-
         r#"
             <?xml version="1.0" encoding="UTF-8"?>
             <Envelope>
@@ -209,21 +196,19 @@ fn test_forwarded_namespace() {
 
 
     </graphml>"#;
-    test_parse_ok(&[
-        (
-            s,
-            Graphml {
-                schema_location: "http://graphml.graphdrawing.org/xmlns
+    test_parse_ok(&[(
+        s,
+        Graphml {
+            schema_location: "http://graphml.graphdrawing.org/xmlns
         http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd"
-                    .to_string(),
-            },
-        ),
-    ]);
+                .to_string(),
+        },
+    )]);
 }
 
 #[test]
 fn test_parse_string() {
-    init_logger();
+    let _ = simple_logger::init();
 
     test_parse_ok(&[
         (
@@ -245,7 +230,7 @@ fn test_parse_string() {
 #[test]
 #[ignore] // FIXME
 fn test_parse_string_not_trim() {
-    init_logger();
+    let _ = simple_logger::init();
 
     test_parse_ok(&[("<bla>     </bla>", "     ".to_string())]);
 }
@@ -254,7 +239,7 @@ fn test_parse_string_not_trim() {
 #[ignore] // FIXME
 fn test_parse_enum() {
     use self::Animal::*;
-    init_logger();
+    let _ = simple_logger::init();
 
     test_parse_ok(&[
         ("<Animal xsi:type=\"Dog\"/>", Dog),
@@ -319,7 +304,7 @@ fn test_parse_enum() {
 
 #[test]
 fn test_parse_i64() {
-    init_logger();
+    let _ = simple_logger::init();
     test_parse_ok(&[
         ("<bla>0</bla>", 0),
         ("<bla>-2</bla>", -2),
@@ -330,7 +315,7 @@ fn test_parse_i64() {
 
 #[test]
 fn test_parse_u64() {
-    init_logger();
+    let _ = simple_logger::init();
     test_parse_ok(&[
         ("<bla>0</bla>", 0),
         ("<bla>1234</bla>", 1234),
@@ -339,24 +324,53 @@ fn test_parse_u64() {
 }
 
 #[test]
-fn test_parse_bool() {
+fn test_parse_bool_element() {
+    let _ = simple_logger::init();
     test_parse_ok(&[
         ("<bla>true</bla>", true),
         ("<bla>false</bla>", false),
         ("<bla> true </bla>", true),
         ("<bla> false </bla>", false),
+        ("<bla>1</bla>", true),
+        ("<bla>0</bla>", false),
+    ]);
+
+    test_parse_invalid::<bool>(&["<bla>verum</bla>"]);
+}
+
+#[test]
+fn test_parse_bool_attribute() {
+    #[derive(PartialEq, Debug, Deserialize, Serialize)]
+    struct Dummy {
+        foo: bool,
+    }
+
+    let _ = simple_logger::init();
+    test_parse_ok(&[
+        ("<bla foo=\"true\"/>", Dummy { foo: true }),
+        ("<bla foo=\"false\"/>", Dummy { foo: false }),
+        ("<bla foo=\"1\"/>", Dummy { foo: true }),
+        ("<bla foo=\"0\"/>", Dummy { foo: false }),
+    ]);
+
+    test_parse_invalid::<Dummy>(&[
+        "<bla foo=\"bar\"/>",
+        "<bla foo=\" true \"/>",
+        "<bla foo=\"10\"/>",
+        "<bla foo=\"\"/>",
+        "<bla/>",
     ]);
 }
 
 #[test]
 fn test_parse_unit() {
-    init_logger();
+    let _ = simple_logger::init();
     test_parse_ok(&[("<bla/>", ())]);
 }
 
 #[test]
 fn test_parse_f64() {
-    init_logger();
+    let _ = simple_logger::init();
     test_parse_ok(&[
         ("<bla>3.0</bla>", 3.0f64),
         ("<bla>3.1</bla>", 3.1),
@@ -371,7 +385,7 @@ fn test_parse_f64() {
 
 #[test]
 fn test_parse_struct() {
-    init_logger();
+    let _ = simple_logger::init();
 
     test_parse_ok(&[
         (
@@ -418,7 +432,7 @@ fn test_parse_struct() {
 
 #[test]
 fn test_option() {
-    init_logger();
+    let _ = simple_logger::init();
     test_parse_ok(&[
         ("<a/>", Some("".to_string())),
         ("<a></a>", Some("".to_string())),
@@ -430,13 +444,13 @@ fn test_option() {
 #[test]
 #[ignore] // FIXME
 fn test_option_not_trim() {
-    init_logger();
+    let _ = simple_logger::init();
     test_parse_ok(&[("<a> </a>", Some(" ".to_string()))]);
 }
 
 #[test]
 fn test_amoskvin() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(Debug, Deserialize, PartialEq, Serialize)]
     struct Root {
         foo: Vec<Foo>,
@@ -447,9 +461,8 @@ fn test_amoskvin() {
         a: String,
         b: Option<String>,
     }
-    test_parse_ok(&[
-        (
-            "
+    test_parse_ok(&[(
+        "
 <root>
 <foo>
  <a>Hello</a>
@@ -459,26 +472,25 @@ fn test_amoskvin() {
  <a>Hi</a>
 </foo>
 </root>",
-            Root {
-                foo: vec![
-                    Foo {
-                        a: "Hello".to_string(),
-                        b: Some("World".to_string()),
-                    },
-                    Foo {
-                        a: "Hi".to_string(),
-                        b: None,
-                    },
-                ],
-            },
-        ),
-    ]);
+        Root {
+            foo: vec![
+                Foo {
+                    a: "Hello".to_string(),
+                    b: Some("World".to_string()),
+                },
+                Foo {
+                    a: "Hi".to_string(),
+                    b: None,
+                },
+            ],
+        },
+    )]);
 }
 
 #[test]
 #[ignore] // FIXME
 fn test_nicolai86() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
     struct TheSender {
         name: String,
@@ -525,9 +537,7 @@ fn test_nicolai86() {
                 Sender: TheSender {
                     name: "European Central Bank".to_string(),
                 },
-                Cube: OuterCube {
-                    Cube: vec![],
-                }
+                Cube: OuterCube { Cube: vec![] },
             },
         ),
         (
@@ -561,7 +571,7 @@ fn test_nicolai86() {
                             },
                         ],
                     }],
-                }
+                },
             },
         ),
     ]);
@@ -569,7 +579,7 @@ fn test_nicolai86() {
 
 #[test]
 fn test_hugo_duncan2() {
-    init_logger();
+    let _ = simple_logger::init();
     let s = r#"
     <?xml version="1.0" encoding="UTF-8"?>
     <DescribeVpcsResponse xmlns="http://ec2.amazonaws.com/doc/2014-10-01/">
@@ -600,7 +610,7 @@ fn test_hugo_duncan2() {
             struct Helper<U> {
                 item: Vec<U>,
             }
-            let h: Helper<_> = try!(de::Deserialize::deserialize(deserializer));
+            let h: Helper<_> = de::Deserialize::deserialize(deserializer)?;
             Ok(ItemVec(h.item))
         }
     }
@@ -610,25 +620,21 @@ fn test_hugo_duncan2() {
         requestId: String,
         vpcSet: ItemVec<VpcSet>,
     }
-    test_parse_ok(&[
-        (
-            s,
-            DescribeVpcsResponse {
-                requestId: "8d521e9a-509e-4ef6-bbb7-9f1ac0d49cd1".to_string(),
-                vpcSet: ItemVec(vec![
-                    VpcSet {
-                        vpcId: "vpc-ba0d18d8".to_string(),
-                        state: "available".to_string(),
-                    },
-                ]),
-            },
-        ),
-    ]);
+    test_parse_ok(&[(
+        s,
+        DescribeVpcsResponse {
+            requestId: "8d521e9a-509e-4ef6-bbb7-9f1ac0d49cd1".to_string(),
+            vpcSet: ItemVec(vec![VpcSet {
+                vpcId: "vpc-ba0d18d8".to_string(),
+                state: "available".to_string(),
+            }]),
+        },
+    )]);
 }
 
 #[test]
 fn test_hugo_duncan() {
-    init_logger();
+    let _ = simple_logger::init();
     let s = "
         <?xml version=\"1.0\" encoding=\"UTF-8\"?>
         <DescribeInstancesResponse xmlns=\"http://ec2.amazonaws.com/doc/2014-10-01/\">
@@ -642,39 +648,35 @@ fn test_hugo_duncan() {
         requestId: String,
         reservationSet: (),
     }
-    test_parse_ok(&[
-        (
-            s,
-            DescribeInstancesResponse {
-                requestId: "9474f558-10a5-42e8-84d1-f9ee181fe943".to_string(),
-                reservationSet: (),
-            },
-        ),
-    ]);
+    test_parse_ok(&[(
+        s,
+        DescribeInstancesResponse {
+            requestId: "9474f558-10a5-42e8-84d1-f9ee181fe943".to_string(),
+            reservationSet: (),
+        },
+    )]);
 }
 
 #[test]
 fn test_parse_xml_value() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(Eq, Debug, PartialEq, Deserialize, Serialize)]
     struct Test {
         #[serde(rename = "$value")]
         myval: String,
     }
-    test_parse_ok(&[
-        (
-            "<Test>abc</Test>",
-            Test {
-                myval: "abc".to_string(),
-            },
-        ),
-    ]);
+    test_parse_ok(&[(
+        "<Test>abc</Test>",
+        Test {
+            myval: "abc".to_string(),
+        },
+    )]);
 }
 
 #[test]
 #[ignore] // FIXME
 fn test_parse_complexstruct() {
-    init_logger();
+    let _ = simple_logger::init();
 
     test_parse_ok(&[
         (
@@ -718,7 +720,7 @@ fn test_parse_complexstruct() {
 
 #[test]
 fn test_parse_attributes() {
-    init_logger();
+    let _ = simple_logger::init();
 
     #[derive(PartialEq, Debug, Serialize, Deserialize)]
     struct A {
@@ -727,15 +729,13 @@ fn test_parse_attributes() {
         a2: i32,
     }
 
-    test_parse_ok(&[
-        (
-            r#"<A a1="What is the answer to the ultimate question?">42</A>"#,
-            A {
-                a1: "What is the answer to the ultimate question?".to_string(),
-                a2: 42,
-            },
-        ),
-    ]);
+    test_parse_ok(&[(
+        r#"<A a1="What is the answer to the ultimate question?">42</A>"#,
+        A {
+            a1: "What is the answer to the ultimate question?".to_string(),
+            a2: 42,
+        },
+    )]);
 
     #[derive(PartialEq, Debug, Serialize, Deserialize)]
     struct B {
@@ -743,15 +743,13 @@ fn test_parse_attributes() {
         b2: i32,
     }
 
-    test_parse_ok(&[
-        (
-            r#"<B b1="What is the answer to the ultimate question?" b2="42"/>"#,
-            B {
-                b1: "What is the answer to the ultimate question?".to_string(),
-                b2: 42,
-            },
-        ),
-    ]);
+    test_parse_ok(&[(
+        r#"<B b1="What is the answer to the ultimate question?" b2="42"/>"#,
+        B {
+            b1: "What is the answer to the ultimate question?".to_string(),
+            b2: 42,
+        },
+    )]);
 
     #[derive(PartialEq, Debug, Serialize, Deserialize)]
     struct C {
@@ -793,24 +791,21 @@ fn test_parse_attributes() {
     struct D {
         d1: Option<A>,
     }
-    test_parse_ok(&[
-        (
-            r#"<D><d1 a1="What is the answer to the ultimate question?">42</d1></D>"#,
-            D {
-                d1: Some(A {
-                    a1: "What is the answer to the ultimate question?".to_string(),
-                    a2: 42,
-                }),
-            },
-        ),
-    ]);
-
+    test_parse_ok(&[(
+        r#"<D><d1 a1="What is the answer to the ultimate question?">42</d1></D>"#,
+        D {
+            d1: Some(A {
+                a1: "What is the answer to the ultimate question?".to_string(),
+                a2: 42,
+            }),
+        },
+    )]);
 }
 
 #[test]
 #[ignore] // FIXME
 fn test_parse_hierarchies() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(PartialEq, Debug, Serialize, Deserialize)]
     struct A {
         a1: String,
@@ -907,7 +902,6 @@ fn test_parse_hierarchies() {
     ]);
 }
 
-
 #[test]
 fn unknown_field() {
     #[derive(Deserialize, Debug, PartialEq, Eq, Serialize)]
@@ -919,9 +913,8 @@ fn unknown_field() {
     struct Other {
         d: i32,
     }
-    test_parse_ok(&[
-        (
-            "<a>
+    test_parse_ok(&[(
+        "<a>
                <b>
                  <c>5</c>
                </b>
@@ -929,11 +922,10 @@ fn unknown_field() {
                  <d>6</d>
                </other>
             </a>",
-            A {
-                other: vec![Other { d: 6 }],
-            },
-        ),
-    ]);
+        A {
+            other: vec![Other { d: 6 }],
+        },
+    )]);
 }
 
 // #[test]
@@ -948,13 +940,11 @@ fn unknown_field() {
 
 #[test]
 fn test_parse_unfinished() {
-    test_parse_err::<Simple>(&[
-        "<Simple>
+    test_parse_err::<Simple>(&["<Simple>
             <c>abc</c>
             <a/>
             <b>2</b>
-            <d/>",
-    ]);
+            <d/>"]);
 }
 
 #[test]
@@ -964,7 +954,7 @@ fn test_things_qc_found() {
 
 #[test]
 fn futile() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
     struct Object {
         id: u8,
@@ -1011,10 +1001,9 @@ fn futile() {
     ]);
 }
 
-
 #[test]
 fn futile2() {
-    init_logger();
+    let _ = simple_logger::init();
     #[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
     struct Null;
 
@@ -1083,4 +1072,15 @@ fn futile2() {
             Stuff { stuff_field: None },
         ),
     ]);
+}
+
+#[test]
+fn newtype_struct() {
+    #[derive(PartialEq, Debug, Serialize, Deserialize)]
+    struct Wrapper(String);
+
+    test_parse_ok(&[(
+        r###"<wrapper>Content</wrapper>"###,
+        Wrapper("Content".into()),
+    )]);
 }

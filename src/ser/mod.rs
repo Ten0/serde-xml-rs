@@ -1,18 +1,17 @@
-use std::io::Write;
 use std::fmt::Display;
+use std::io::Write;
 
 use serde::ser::{self, Serialize};
 
-use error::{Error, ErrorKind, Result};
 use self::var::{Map, Struct};
 use self::seq::Seq;
 use self::tuples::Tuple;
+use error::{Error, Result};
 
 mod var;
 mod seq;
 mod helpers;
 mod tuples;
-
 
 /// A convenience method for serializing some object to a buffer.
 ///
@@ -44,7 +43,6 @@ pub fn to_writer<W: Write, S: Serialize>(writer: W, value: &S) -> Result<()> {
     let mut ser = Serializer::new(writer);
     value.serialize(&mut ser)
 }
-
 
 /// A convenience method for serializing some object to a string.
 ///
@@ -107,7 +105,6 @@ where
         Ok(())
     }
 }
-
 
 #[allow(unused_variables)]
 impl<'w, W> ser::Serializer for &'w mut Serializer<W>
@@ -186,9 +183,9 @@ where
     fn serialize_bytes(self, value: &[u8]) -> Result<Self::Ok> {
         // TODO: I imagine you'd want to use base64 here.
         // Not sure how to roundtrip effectively though...
-        Err(
-            ErrorKind::UnsupportedOperation("serialize_bytes".to_string()).into(),
-        )
+        Err(Error::UnsupportedOperation {
+            operation: "serialize_bytes".to_string(),
+        })
     }
 
     fn serialize_none(self) -> Result<Self::Ok> {
@@ -283,13 +280,12 @@ where
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Serializer as SerSerializer;
     use serde::ser::{SerializeMap, SerializeStruct};
     use std::collections::BTreeMap;
+    use serde::Serializer as SerSerializer;
 
     #[test]
     fn test_serialize_bool() {
